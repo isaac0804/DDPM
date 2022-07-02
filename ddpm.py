@@ -3,24 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from composer.models import UNet
+from tqdm import tqdm
 
-
-class SinusoidalPositionEmbeddings(nn.Module):
-    """
-    Position Embedding in Temporal Dimension during diffusion process
-    """
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-
-    def forward(self, time):
-        device = time.device
-        half_dim = self.dim // 2
-        embeddings = math.log(10000) / (half_dim - 1)
-        embeddings = torch.exp(torch.arange(half_dim, device=device) * -embeddings)
-        embeddings =  time[:, None] * embeddings[None, :]
-        embeddings =  torch.cat([embeddings.sin(), embeddings.cos()], dim=-1)
-        return embeddings
 
 def cosine_beta_schedule(timesteps, s=0.008):
     """

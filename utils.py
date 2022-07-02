@@ -14,3 +14,8 @@ class Residual(nn.Module):
     def forward(self, x, *args, **kwargs):
         return self.fn(x, *args, **kwargs) + x
     
+def Upsample(dim):
+    return nn.ConvTranspose2d(dim, dim, 4, 2, 1)
+
+def Downsample(dim):
+    return nn.Conv2d(dim, dim, 4, 2, 1)
