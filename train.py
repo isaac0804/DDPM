@@ -48,7 +48,7 @@ if __name__ == "__main__":
         convnext_mult=2,
         batch_size=batch_size,
         timesteps=200,
-        loss_type="huber")
+        loss_type="l1")
     optimizer = Adam(model.parameters(), lr=1e-3)
 
     trainer = Trainer(
@@ -57,12 +57,12 @@ if __name__ == "__main__":
         # eval_dataloader=test_loader,
         optimizers=optimizer,
         device=device,
-        max_duration="5ep",
+        max_duration="10ep",
         save_folder="runs/{run_name}/checkpoints",
         save_interval="1ep",
-        algorithms=[
-            ChannelsLast(),
-        ],
+        # algorithms=[
+        #     ChannelsLast(),
+        # ],
         loggers=[
             file_logger
         ],

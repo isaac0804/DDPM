@@ -1,7 +1,7 @@
 from functools import partial
 from numpy import einsum
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
 from torch import nn, einsum
 
 from composer.models import ComposerModel, UNet
@@ -334,11 +334,12 @@ class UNet(ComposerModel):
                 )
 
                 if i == 0:
-                    images.append(model_mean.cpu().numpy())
+                    image = model_mean
                 else:
                     posterior_variance_t = extract(get_posterior_variance(alphas, betas), t, image.shape)
                     noise = torch.randn_like(image)
                     # Algorithm 2 line 4:
-                    images.append((model_mean + torch.sqrt(posterior_variance_t) * noise).cpu().numpy())
+                    image = model_mean + torch.sqrt(posterior_variance_t) * noise
+                images.append(image.cpu().numpy())
 
             return images
