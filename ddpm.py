@@ -36,36 +36,42 @@ def sigmoid_beta_schedule(timesteps):
     betas = torch.linspace(-6, 6, timesteps)
     return torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
 
-timesteps = 200
-
-# define beta schedule
-betas = linear_beta_schedule(timesteps=timesteps)
-
 # define alphas 
-alphas = 1. - betas
-alphas_cumprod = torch.cumprod(alphas, axis=0)
-alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
-sqrt_recip_alphas = torch.sqrt(1.0 / alphas)
+def get_alphas(betas):
+    return 1. - betas
+
+def get_alphas_cumprod(alphas):
+    return torch.cumprod(alphas, axis=0)
+
+def get_alphas_cumprod_prev(alphas):
+    return F.pad(get_alphas_cumprod(alphas)[:-1], (1, 0), value=1.0)
+
+def get_sqrt_recip_alphas(alphas):
+    return torch.sqrt(1.0 / alphas)
 
 # calculations for diffusion q(x_t | x_{t-1}) and others
-sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
-sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
+def get_sqrt_alphas_cumprod(alphas):
+    return torch.sqrt(get_alphas_cumprod(alphas))
+def get_sqrt_one_minus_alphas_cumprod(alphas):
+    return torch.sqrt(1. - get_alphas_cumprod(alphas))
 
 # calculations for posterior q(x_{t-1} | x_t, x_0)
-posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
+def get_posterior_variance(alphas, betas):
+    return betas * (1. - get_alphas_cumprod_prev(alphas)) / (1. - get_alphas_cumprod(alphas))
 
 def extract(a, t, x_shape):
     batch_size = t.shape[0]
     out = a.gather(-1, t.cpu())
     return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
 
-def q_sample(x_start, t, noise=None):
+def q_sample(x_start, t, betas, noise=None):
     if noise is None:
         noise = torch.randn_like(x_start)
-
-    sqrt_alphas_cumprod_t = extract(sqrt_alphas_cumprod, t, x_start.shape)
+    
+    alphas = get_alphas(betas)
+    sqrt_alphas_cumprod_t = extract(get_sqrt_alphas_cumprod(alphas), t, x_start.shape)
     sqrt_one_minus_alphas_cumprod_t = extract(
-        sqrt_one_minus_alphas_cumprod, t, x_start.shape
+        get_sqrt_one_minus_alphas_cumprod(alphas), t, x_start.shape
     )
 
     return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
@@ -92,9 +98,9 @@ def p_losses(denoise_model, x_start, t, noise=None, loss_type="l1"):
 def p_sample(model, x, t, t_index):
     betas_t = extract(betas, t, x.shape)
     sqrt_one_minus_alphas_cumprod_t = extract(
-        sqrt_one_minus_alphas_cumprod, t, x.shape
+        get_sqrt_one_minus_alphas_cumprod, t, x.shape
     )
-    sqrt_recip_alphas_t = extract(sqrt_recip_alphas, t, x.shape)
+    sqrt_recip_alphas_t = extract(get_sqrt_recip_alphas, t, x.shape)
     
     # Equation 11 in the paper
     # Use our model (noise predictor) to predict the mean
@@ -105,7 +111,7 @@ def p_sample(model, x, t, t_index):
     if t_index == 0:
         return model_mean
     else:
-        posterior_variance_t = extract(posterior_variance, t, x.shape)
+        posterior_variance_t = extract(get_posterior_variance, t, x.shape)
         noise = torch.randn_like(x)
         # Algorithm 2 line 4:
         return model_mean + torch.sqrt(posterior_variance_t) * noise 

@@ -31,8 +31,8 @@ if __name__ == "__main__":
         capture_stderr=False,
         capture_stdout=False,
         log_level=LogLevel.BATCH,
-        log_interval=10,
-        flush_interval=20
+        log_interval=100,
+        flush_interval=200
     )
     # tb_logger = TensorboardLogger(log_dir="runs", flush_interval=10)
 
@@ -57,7 +57,7 @@ if __name__ == "__main__":
         # eval_dataloader=test_loader,
         optimizers=optimizer,
         device=device,
-        max_duration="2ep",
+        max_duration="5ep",
         save_folder="runs/{run_name}/checkpoints",
         save_interval="1ep",
         algorithms=[

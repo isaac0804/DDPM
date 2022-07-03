@@ -8,7 +8,9 @@ from composer.models import ComposerModel, UNet
 from einops import rearrange
 import math
 
-from ddpm import p_losses, q_sample
+from tqdm import tqdm
+
+from ddpm import extract, get_alphas, get_posterior_variance, get_sqrt_one_minus_alphas_cumprod, get_sqrt_recip_alphas, linear_beta_schedule, p_losses, q_sample
 from utils import exists, default, Residual, Upsample, Downsample
 
 class Block(nn.Module):
@@ -178,16 +180,20 @@ class UNet(ComposerModel):
         convnext_mult=2,
         batch_size=8,
         timesteps=200,
-        loss_type="l1"
+        loss_type="l1",
+        betas="linear",
     ):
         super().__init__()
 
         self.batch_size = batch_size
         self.timesteps = timesteps
+        self.channels = channels
         self.noise = None
 
-        # determine dimensions
-        self.channels = channels
+        if betas == "linear":
+            self.betas = linear_beta_schedule(self.timesteps)
+        else:
+            raise NotImplementedError()
 
         init_dim = default(init_dim, dim // 3 * 2)
         self.init_conv = nn.Conv2d(channels, init_dim, 7, padding=3)
@@ -270,7 +276,7 @@ class UNet(ComposerModel):
         x, _ = x
         time = torch.randint(0, self.timesteps, (self.batch_size,), device=x.device).long()
         self.noise = torch.randn_like(x)
-        x = q_sample(x, t=time, noise=self.noise)
+        x = q_sample(x, t=time, betas=self.betas, noise=self.noise)
         x = self.init_conv(x)
 
         t = self.time_mlp(time) if exists(self.time_mlp) else None
@@ -303,3 +309,36 @@ class UNet(ComposerModel):
     def loss(self, predicted_noise, batch):
         loss = self.criterion(predicted_noise, self.noise)
         return loss
+    
+    def sample(self, image_size):
+        with torch.no_grad():
+            image = torch.randn(self.batch_size, self.channels, image_size, image_size)
+            images = []
+
+            for i in tqdm(reversed(range(0, self.timesteps)), desc='sampling loop time step', total=self.timesteps):
+
+                # p sample
+                t = torch.full((self.batch_size,), i, dtype=torch.long)
+                betas = self.betas
+                alphas = get_alphas(self.betas)
+                betas_t = extract(betas, t, image.shape)
+                sqrt_one_minus_alphas_cumprod_t = extract(
+                    get_sqrt_one_minus_alphas_cumprod(alphas), t, image.shape
+                )
+                sqrt_recip_alphas_t = extract(get_sqrt_recip_alphas(alphas), t, image.shape)
+                
+                # Equation 11 in the paper
+                # Use our model (noise predictor) to predict the mean
+                model_mean = sqrt_recip_alphas_t * (
+                    image - betas_t * self.forward((image, None)) / sqrt_one_minus_alphas_cumprod_t
+                )
+
+                if i == 0:
+                    images.append(model_mean.cpu().numpy())
+                else:
+                    posterior_variance_t = extract(get_posterior_variance(alphas, betas), t, image.shape)
+                    noise = torch.randn_like(image)
+                    # Algorithm 2 line 4:
+                    images.append((model_mean + torch.sqrt(posterior_variance_t) * noise).cpu().numpy())
+
+            return images
