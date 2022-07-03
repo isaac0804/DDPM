@@ -189,6 +189,7 @@ class UNet(ComposerModel):
         self.timesteps = timesteps
         self.channels = channels
         self.noise = None
+        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
         if betas == "linear":
             self.betas = linear_beta_schedule(self.timesteps)
@@ -310,15 +311,19 @@ class UNet(ComposerModel):
         loss = self.criterion(predicted_noise, self.noise)
         return loss
     
-    def sample(self, image_size):
+    def sample(self, image_size, show_progress=False):
         with torch.no_grad():
-            image = torch.randn(self.batch_size, self.channels, image_size, image_size)
+            image = torch.randn(self.batch_size, self.channels, image_size, image_size, device=self.device)
             images = []
 
-            for i in tqdm(reversed(range(0, self.timesteps)), desc='sampling loop time step', total=self.timesteps):
+            if show_progress:
+                iterator = tqdm(reversed(range(0, self.timesteps)), desc='sampling loop time step', total=self.timesteps)
+            else:
+                iterator = reversed(range(0, self.timesteps))
 
+            for i in iterator:
                 # p sample
-                t = torch.full((self.batch_size,), i, dtype=torch.long)
+                t = torch.full((self.batch_size,), i, dtype=torch.long, device=self.device)
                 betas = self.betas
                 alphas = get_alphas(self.betas)
                 betas_t = extract(betas, t, image.shape)

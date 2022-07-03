@@ -1,6 +1,6 @@
 # Denoising Diffusion Probabilistic Method
 
-Implementation of DDPM in pytorch referencing https://huggingface.co/blog/annotated-diffusion
+Implementation of DDPM in pytorch referencing [The Annotated Diffusion Model](https://huggingface.co/blog/annotated-diffusion).
 
 The backbone will be ConvNeXT for now, but it can be changed to any other architecture.
 
@@ -16,3 +16,8 @@ The backbone will be ConvNeXT for now, but it can be changed to any other archit
 | -               | -     | -         |
 | Without         | 7.80  | 3:21      |
 | With            | 4.10  | 6:18      |
+
+## Bugs along the way
+
+- Tensorboard logger can't be used as the timeout value is too large.
+- Autoresume on the first epoch is not working.

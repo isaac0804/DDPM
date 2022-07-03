@@ -1,23 +1,25 @@
 import logging
-from cv2 import log
+import os
+from matplotlib import animation, pyplot as plt
+import numpy as np
 
 import torch
 from torch.optim import Adam
-from torchvision import datasets, transforms
 
 from composer import Trainer
-from composer.algorithms import ChannelsLast
-from composer.loggers import FileLogger, LogLevel, TensorboardLogger
-from composer.callbacks import CheckpointSaver
+from composer.loggers import FileLogger, LogLevel, WandBLogger
+from composer.core.callback import Callback
 
 from data import get_cifar10
 from model import UNet
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    logging.getLogger("composer").setLevel(logging.INFO)
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
     device = "gpu" if torch.cuda.is_available() else "cpu"
-    batch_size = 32
+    batch_size = 64
     timesteps = 200
 
     train_dataset, _ = get_cifar10()
@@ -34,7 +36,8 @@ if __name__ == "__main__":
         log_interval=100,
         flush_interval=200
     )
-    # tb_logger = TensorboardLogger(log_dir="runs", flush_interval=10)
+    # tb_logger = TensorboardLogger(log_dir="runs", flush_interval=1000)
+    wandb_logger = WandBLogger()
 
     model = UNet(
         dim=32, # Image size
@@ -51,20 +54,45 @@ if __name__ == "__main__":
         loss_type="l1")
     optimizer = Adam(model.parameters(), lr=1e-3)
 
+    class SamplingCallback(Callback):
+        def epoch_end(self, state, logger):
+
+            fig = plt.figure()
+            samples = state.model.sample(image_size=32)
+            ims = []
+            for i in range(model.timesteps):
+                samples[i][0] = np.clip(samples[i][0] /2 + 0.5, 0, 1)
+                im = plt.imshow(samples[i][0].transpose(1, 2, 0), animated=True)
+                ims.append([im])
+            animate = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
+            folder = f"runs/{state.run_name}/samples"
+            if os.path.exists(folder):
+                animate.save(f"{folder}/sample-{state.timestamp.epoch}.gif")
+            else:
+                os.makedirs(folder)
+                animate.save(f"{folder}/sample-{state.timestamp.epoch}.gif")
+    
+    run_name = "default-huber"
+
     trainer = Trainer(
         model=model,
-        train_dataloader=train_loader,
-        # eval_dataloader=test_loader,
         optimizers=optimizer,
+        max_duration="30ep",
+
+        train_dataloader=train_loader,
         device=device,
-        max_duration="10ep",
-        save_folder="runs/{run_name}/checkpoints",
-        save_interval="1ep",
-        # algorithms=[
-        #     ChannelsLast(),
-        # ],
+
+        run_name=run_name,
+        save_folder=f"runs/{run_name}/checkpoints",
+        save_interval="2ep",
+
+        step_schedulers_every_batch=False,
+        callbacks=[
+            SamplingCallback(),
+        ],
         loggers=[
-            file_logger
+            file_logger,
+            wandb_logger
         ],
     )
 
