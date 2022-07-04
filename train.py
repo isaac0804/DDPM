@@ -9,6 +9,8 @@ from torch.optim import Adam
 from composer import Trainer
 from composer.loggers import FileLogger, LogLevel, WandBLogger
 from composer.core.callback import Callback
+from composer.callbacks import LRMonitor
+from composer.optim.scheduler import CosineAnnealingWithWarmupScheduler
 
 from data import get_cifar10
 from model import UNet
@@ -46,13 +48,15 @@ if __name__ == "__main__":
         dim_mults=(1, 2, 4, 8),
         channels=3,
         with_time_emb=True,
-        resnet_block_groups=8,
+        resnet_block_groups=12,
         use_convnext=True,
         convnext_mult=2,
         batch_size=batch_size,
         timesteps=200,
-        loss_type="l1")
+        loss_type="huber")
     optimizer = Adam(model.parameters(), lr=1e-3)
+
+    lr_scheduler = CosineAnnealingWithWarmupScheduler(t_warmup="5ep", alpha_f=1e-4)
 
     class SamplingCallback(Callback):
         def epoch_end(self, state, logger):
@@ -72,7 +76,7 @@ if __name__ == "__main__":
                 os.makedirs(folder)
                 animate.save(f"{folder}/sample-{state.timestamp.epoch}.gif")
     
-    run_name = "default-huber"
+    run_name = "default-huber-warmup_cosine"
 
     trainer = Trainer(
         model=model,
@@ -84,16 +88,19 @@ if __name__ == "__main__":
 
         run_name=run_name,
         save_folder=f"runs/{run_name}/checkpoints",
-        save_interval="2ep",
+        save_interval="5ep",
 
-        step_schedulers_every_batch=False,
+        schedulers=[
+            lr_scheduler
+        ],
         callbacks=[
             SamplingCallback(),
+            LRMonitor()
         ],
         loggers=[
             file_logger,
             wandb_logger
-        ],
+        ]
     )
 
     trainer.fit()

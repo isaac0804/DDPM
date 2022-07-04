@@ -1,17 +1,18 @@
-from functools import partial
-from numpy import einsum
-import torch
-import torch.nn.functional as F
-from torch import nn, einsum
-
-from composer.models import ComposerModel, UNet
-from einops import rearrange
 import math
+from functools import partial
 
+import torch
+from composer.models import ComposerModel
+from einops import rearrange
+from numpy import einsum
+from torch import einsum, nn
 from tqdm import tqdm
 
-from ddpm import extract, get_alphas, get_posterior_variance, get_sqrt_one_minus_alphas_cumprod, get_sqrt_recip_alphas, linear_beta_schedule, p_losses, q_sample
-from utils import exists, default, Residual, Upsample, Downsample
+from ddpm import (extract, get_alphas, get_posterior_variance,
+                  get_sqrt_one_minus_alphas_cumprod, get_sqrt_recip_alphas,
+                  linear_beta_schedule, q_sample)
+from utils import Downsample, Residual, Upsample, default, exists
+
 
 class Block(nn.Module):
     def __init__(self, dim, dim_out, groups = 8):
@@ -311,40 +312,40 @@ class UNet(ComposerModel):
         loss = self.criterion(predicted_noise, self.noise)
         return loss
     
+    @torch.no_grad()
     def sample(self, image_size, show_progress=False):
-        with torch.no_grad():
-            image = torch.randn(self.batch_size, self.channels, image_size, image_size, device=self.device)
-            images = []
+        image = torch.randn(self.batch_size, self.channels, image_size, image_size, device=self.device)
+        images = []
 
-            if show_progress:
-                iterator = tqdm(reversed(range(0, self.timesteps)), desc='sampling loop time step', total=self.timesteps)
+        if show_progress:
+            iterator = tqdm(reversed(range(0, self.timesteps)), desc='sampling loop time step', total=self.timesteps)
+        else:
+            iterator = reversed(range(0, self.timesteps))
+
+        for i in iterator:
+            # p sample
+            t = torch.full((self.batch_size,), i, dtype=torch.long, device=self.device)
+            betas = self.betas
+            alphas = get_alphas(self.betas)
+            betas_t = extract(betas, t, image.shape)
+            sqrt_one_minus_alphas_cumprod_t = extract(
+                get_sqrt_one_minus_alphas_cumprod(alphas), t, image.shape
+            )
+            sqrt_recip_alphas_t = extract(get_sqrt_recip_alphas(alphas), t, image.shape)
+            
+            # Equation 11 in the paper
+            # Use our model (noise predictor) to predict the mean
+            model_mean = sqrt_recip_alphas_t * (
+                image - betas_t * self.forward((image, None)) / sqrt_one_minus_alphas_cumprod_t
+            )
+
+            if i == 0:
+                image = model_mean
             else:
-                iterator = reversed(range(0, self.timesteps))
+                posterior_variance_t = extract(get_posterior_variance(alphas, betas), t, image.shape)
+                noise = torch.randn_like(image)
+                # Algorithm 2 line 4:
+                image = model_mean + torch.sqrt(posterior_variance_t) * noise
+            images.append(image.cpu().numpy())
 
-            for i in iterator:
-                # p sample
-                t = torch.full((self.batch_size,), i, dtype=torch.long, device=self.device)
-                betas = self.betas
-                alphas = get_alphas(self.betas)
-                betas_t = extract(betas, t, image.shape)
-                sqrt_one_minus_alphas_cumprod_t = extract(
-                    get_sqrt_one_minus_alphas_cumprod(alphas), t, image.shape
-                )
-                sqrt_recip_alphas_t = extract(get_sqrt_recip_alphas(alphas), t, image.shape)
-                
-                # Equation 11 in the paper
-                # Use our model (noise predictor) to predict the mean
-                model_mean = sqrt_recip_alphas_t * (
-                    image - betas_t * self.forward((image, None)) / sqrt_one_minus_alphas_cumprod_t
-                )
-
-                if i == 0:
-                    image = model_mean
-                else:
-                    posterior_variance_t = extract(get_posterior_variance(alphas, betas), t, image.shape)
-                    noise = torch.randn_like(image)
-                    # Algorithm 2 line 4:
-                    image = model_mean + torch.sqrt(posterior_variance_t) * noise
-                images.append(image.cpu().numpy())
-
-            return images
+        return images
