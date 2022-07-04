@@ -334,14 +334,14 @@ class DDPM(ComposerModel):
 
         return self.model(x, time)
 
-    def loss(self, predicted_noise):
+    def loss(self, predicted_noise, batch):
         loss = self.criterion(predicted_noise, self.noise)
         return loss
 
     @torch.no_grad()
     def sample(self, show_progress=False):
         image = torch.randn(self.batch_size, self.channels,
-                            *self.image_size, device=self.device)
+                            self.image_size, self.image_size, device=self.device)
         images = []
 
         if not show_progress:
@@ -367,7 +367,7 @@ class DDPM(ComposerModel):
             # Use our model (noise predictor) to predict the mean
             model_mean = sqrt_recip_alphas_t * (
                 image - betas_t *
-                self.model(image) / sqrt_one_minus_alphas_cumprod_t
+                self.model(image, t) / sqrt_one_minus_alphas_cumprod_t
             )
 
             if i == 0:
