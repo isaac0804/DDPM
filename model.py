@@ -15,13 +15,13 @@ from utils import Downsample, Residual, Upsample, default, exists
 
 
 class Block(nn.Module):
-    def __init__(self, dim, dim_out, groups = 8):
+    def __init__(self, dim, dim_out, groups=8):
         super().__init__()
-        self.proj = nn.Conv2d(dim, dim_out, 3, padding = 1)
+        self.proj = nn.Conv2d(dim, dim_out, 3, padding=1)
         self.norm = nn.GroupNorm(groups, dim_out)
         self.act = nn.SiLU()
 
-    def forward(self, x, scale_shift = None):
+    def forward(self, x, scale_shift=None):
         x = self.proj(x)
         x = self.norm(x)
 
@@ -31,6 +31,7 @@ class Block(nn.Module):
 
         x = self.act(x)
         return x
+
 
 class ResnetBlock(nn.Module):
     def __init__(self, dim, dim_out, *, time_emb_dim=None, groups=8):
@@ -43,7 +44,8 @@ class ResnetBlock(nn.Module):
 
         self.block1 = Block(dim, dim_out, groups=groups)
         self.block2 = Block(dim_out, dim_out, groups=groups)
-        self.res_conv = nn.Conv2d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
+        self.res_conv = nn.Conv2d(
+            dim, dim_out, 1) if dim != dim_out else nn.Identity()
 
     def forward(self, x, time_emb=None):
         h = self.block1(x)
@@ -54,7 +56,8 @@ class ResnetBlock(nn.Module):
 
         h = self.block2(h)
         return h + self.res_conv(x)
-    
+
+
 class ConvNextBlock(nn.Module):
     def __init__(self, dim, dim_out, *, time_emb_dim=None, mult=2, norm=True):
         super().__init__()
@@ -74,7 +77,8 @@ class ConvNextBlock(nn.Module):
             nn.Conv2d(dim_out * mult, dim_out, 3, padding=1),
         )
 
-        self.res_conv = nn.Conv2d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
+        self.res_conv = nn.Conv2d(
+            dim, dim_out, 1) if dim != dim_out else nn.Identity()
 
     def forward(self, x, time_emb=None):
         h = self.ds_conv(x)
@@ -87,10 +91,12 @@ class ConvNextBlock(nn.Module):
         h = self.net(h)
         return h + self.res_conv(x)
 
+
 class SinusoidalPositionEmbeddings(nn.Module):
     """
     Position Embedding in Temporal Dimension during diffusion process
     """
+
     def __init__(self, dim):
         super().__init__()
         self.dim = dim
@@ -99,10 +105,12 @@ class SinusoidalPositionEmbeddings(nn.Module):
         device = time.device
         half_dim = self.dim // 2
         embeddings = math.log(10000) / (half_dim - 1)
-        embeddings = torch.exp(torch.arange(half_dim, device=device) * -embeddings)
-        embeddings =  time[:, None] * embeddings[None, :]
-        embeddings =  torch.cat([embeddings.sin(), embeddings.cos()], dim=-1)
+        embeddings = torch.exp(torch.arange(
+            half_dim, device=device) * -embeddings)
+        embeddings = time[:, None] * embeddings[None, :]
+        embeddings = torch.cat([embeddings.sin(), embeddings.cos()], dim=-1)
         return embeddings
+
 
 class Attention(nn.Module):
     def __init__(self, dim, heads=4, dim_head=32):
@@ -117,7 +125,8 @@ class Attention(nn.Module):
         b, c, h, w = x.shape
         qkv = self.to_qkv(x).chunk(3, dim=1)
         q, k, v = map(
-            lambda t: rearrange(t, "b (h c) x y -> b h c (x y)", h=self.heads), qkv
+            lambda t: rearrange(
+                t, "b (h c) x y -> b h c (x y)", h=self.heads), qkv
         )
         q = q * self.scale
 
@@ -129,6 +138,7 @@ class Attention(nn.Module):
         out = rearrange(out, "b h (x y) d -> b (h d) x y", x=h, y=w)
         return self.to_out(out)
 
+
 class LinearAttention(nn.Module):
     def __init__(self, dim, heads=4, dim_head=32):
         super().__init__()
@@ -137,14 +147,15 @@ class LinearAttention(nn.Module):
         hidden_dim = dim_head * heads
         self.to_qkv = nn.Conv2d(dim, hidden_dim * 3, 1, bias=False)
 
-        self.to_out = nn.Sequential(nn.Conv2d(hidden_dim, dim, 1), 
+        self.to_out = nn.Sequential(nn.Conv2d(hidden_dim, dim, 1),
                                     nn.GroupNorm(1, dim))
 
     def forward(self, x):
         b, c, h, w = x.shape
         qkv = self.to_qkv(x).chunk(3, dim=1)
         q, k, v = map(
-            lambda t: rearrange(t, "b (h c) x y -> b h c (x y)", h=self.heads), qkv
+            lambda t: rearrange(
+                t, "b (h c) x y -> b h c (x y)", h=self.heads), qkv
         )
 
         q = q.softmax(dim=-2)
@@ -154,8 +165,10 @@ class LinearAttention(nn.Module):
         context = torch.einsum("b h d n, b h e n -> b h d e", k, v)
 
         out = torch.einsum("b h d e, b h d n -> b h e n", context, q)
-        out = rearrange(out, "b h c (x y) -> b (h c) x y", h=self.heads, x=h, y=w)
+        out = rearrange(out, "b h c (x y) -> b (h c) x y",
+                        h=self.heads, x=h, y=w)
         return self.to_out(out)
+
 
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
@@ -167,7 +180,8 @@ class PreNorm(nn.Module):
         x = self.norm(x)
         return self.fn(x)
 
-class UNet(ComposerModel):
+
+class UNet(nn.Module):
     def __init__(
         self,
         dim,
@@ -179,30 +193,15 @@ class UNet(ComposerModel):
         resnet_block_groups=8,
         use_convnext=True,
         convnext_mult=2,
-        batch_size=8,
-        timesteps=200,
-        loss_type="l1",
-        betas="linear",
     ):
         super().__init__()
-
-        self.batch_size = batch_size
-        self.timesteps = timesteps
-        self.channels = channels
-        self.noise = None
-        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
-        if betas == "linear":
-            self.betas = linear_beta_schedule(self.timesteps)
-        else:
-            raise NotImplementedError()
 
         init_dim = default(init_dim, dim // 3 * 2)
         self.init_conv = nn.Conv2d(channels, init_dim, 7, padding=3)
 
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
-        
+
         if use_convnext:
             block_klass = partial(ConvNextBlock, mult=convnext_mult)
         else:
@@ -251,7 +250,8 @@ class UNet(ComposerModel):
             self.ups.append(
                 nn.ModuleList(
                     [
-                        block_klass(dim_out * 2, dim_in, time_emb_dim=time_dim),
+                        block_klass(dim_out * 2, dim_in,
+                                    time_emb_dim=time_dim),
                         block_klass(dim_in, dim_in, time_emb_dim=time_dim),
                         Residual(PreNorm(dim_in, LinearAttention(dim_in))),
                         Upsample(dim_in) if not is_last else nn.Identity(),
@@ -264,21 +264,8 @@ class UNet(ComposerModel):
             block_klass(dim, dim), nn.Conv2d(dim, out_dim, 1)
         )
 
-        if loss_type == 'l1':
-            self.criterion = nn.L1Loss()
-        elif loss_type == 'l2':
-            self.criterion = nn.MSELoss()
-        elif loss_type == "huber":
-            self.criterion = nn.SmoothL1Loss()
-        else:
-            raise NotImplementedError()
-        
+    def forward(self, x, time):
 
-    def forward(self, x):
-        x, _ = x
-        time = torch.randint(0, self.timesteps, (self.batch_size,), device=x.device).long()
-        self.noise = torch.randn_like(x)
-        x = q_sample(x, t=time, betas=self.betas, noise=self.noise)
         x = self.init_conv(x)
 
         t = self.time_mlp(time) if exists(self.time_mlp) else None
@@ -308,41 +295,86 @@ class UNet(ComposerModel):
 
         return self.final_conv(x)
 
-    def loss(self, predicted_noise, batch):
+
+class DDPM(ComposerModel):
+    def __init__(self, model, batch_size, image_size, channels, timesteps, loss_type="huber", betas_type="linear"):
+        super().__init__()
+        self.model = model
+        self.noise = None
+        self.batch_size = batch_size
+        self.image_size = image_size
+        self.channels = channels
+        self.timesteps = timesteps
+        self.device = torch.device(
+            'cuda' if torch.cuda.is_available() else 'cpu')
+
+        if betas_type == "linear":
+            self.betas = linear_beta_schedule(self.timesteps)
+        else:
+            raise NotImplementedError()
+        self.alphas = get_alphas(self.betas)
+
+        if loss_type == 'l1':
+            self.criterion = nn.L1Loss()
+        elif loss_type == 'l2':
+            self.criterion = nn.MSELoss()
+        elif loss_type == "huber":
+            self.criterion = nn.SmoothL1Loss()
+        else:
+            raise NotImplementedError()
+
+    def forward(self, x):
+
+        x, _ = x  # Excluding labels
+
+        time = torch.randint(
+            0, self.timesteps, (self.batch_size,), device=self.device).long()
+        self.noise = torch.randn_like(x)
+        x = q_sample(x, t=time, betas=self.betas, noise=self.noise)
+
+        return self.model(x, time)
+
+    def loss(self, predicted_noise):
         loss = self.criterion(predicted_noise, self.noise)
         return loss
-    
+
     @torch.no_grad()
-    def sample(self, image_size, show_progress=False):
-        image = torch.randn(self.batch_size, self.channels, image_size, image_size, device=self.device)
+    def sample(self, show_progress=False):
+        image = torch.randn(self.batch_size, self.channels,
+                            *self.image_size, device=self.device)
         images = []
 
-        if show_progress:
-            iterator = tqdm(reversed(range(0, self.timesteps)), desc='sampling loop time step', total=self.timesteps)
-        else:
+        if not show_progress:
             iterator = reversed(range(0, self.timesteps))
+        else:
+            iterator = tqdm(reversed(range(0, self.timesteps)),
+                            desc='sampling loop time step', total=self.timesteps)
 
         for i in iterator:
             # p sample
-            t = torch.full((self.batch_size,), i, dtype=torch.long, device=self.device)
+            t = torch.full((self.batch_size,), i,
+                           dtype=torch.long, device=self.device)
             betas = self.betas
             alphas = get_alphas(self.betas)
             betas_t = extract(betas, t, image.shape)
             sqrt_one_minus_alphas_cumprod_t = extract(
                 get_sqrt_one_minus_alphas_cumprod(alphas), t, image.shape
             )
-            sqrt_recip_alphas_t = extract(get_sqrt_recip_alphas(alphas), t, image.shape)
-            
+            sqrt_recip_alphas_t = extract(
+                get_sqrt_recip_alphas(alphas), t, image.shape)
+
             # Equation 11 in the paper
             # Use our model (noise predictor) to predict the mean
             model_mean = sqrt_recip_alphas_t * (
-                image - betas_t * self.forward((image, None)) / sqrt_one_minus_alphas_cumprod_t
+                image - betas_t *
+                self.model(image) / sqrt_one_minus_alphas_cumprod_t
             )
 
             if i == 0:
                 image = model_mean
             else:
-                posterior_variance_t = extract(get_posterior_variance(alphas, betas), t, image.shape)
+                posterior_variance_t = extract(
+                    get_posterior_variance(alphas, betas), t, image.shape)
                 noise = torch.randn_like(image)
                 # Algorithm 2 line 4:
                 image = model_mean + torch.sqrt(posterior_variance_t) * noise
