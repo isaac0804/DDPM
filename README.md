@@ -6,18 +6,20 @@ The backbone will be ConvNeXT for now, but it can be changed to any other archit
 
 ## Results
 
-| Loss Type                                  | Value |
-| -                                          | -     |
-| huber loss (1656835168-steadfast-nautilus) | 0.05  |
-| L2 loss (1656841502-spiritual-bee)         | 0.12  |
-| L1 loss (1656843751-crafty-zebu)           | 0.20  |
+![Gray sample after 30 epochs](assets\sample-30ep.gif)
+![Color sample after 100 epochs](assets\sample-100ep.gif)
 
-| Channel Last    | Ba/s  | per epoch |
-| -               | -     | -         |
-| Without         | 7.80  | 3:21      |
-| With            | 4.10  | 6:18      |
+## Hyperparameters
+
+Timesteps: 200
+Batch Size: 64
 
 ## Bugs along the way
 
 - Tensorboard logger can't be used as the timeout value is too large.
 - Autoresume on the first epoch is not working.
+- Channel last reduce overall speed
+    | Channel Last    | Ba/s  | per epoch |
+    | -               | -     | -         |
+    | Without         | 7.80  | 3:21      |
+    | With            | 4.10  | 6:18      |
