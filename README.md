@@ -6,8 +6,8 @@ The backbone will be ConvNeXT for now, but it can be changed to any other archit
 
 ## Results
 
-![Gray sample after 30 epochs](assets\sample-30ep.gif)
-![Color sample after 100 epochs](assets\sample-100ep.gif)
+![Gray sample after 30 epochs](./assets/sample-30ep.gif)
+![Color sample after 100 epochs](./assets/sample-100ep.gif)
 
 ## Hyperparameters
 
