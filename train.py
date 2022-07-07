@@ -22,10 +22,10 @@ if __name__ == "__main__":
     device = "gpu" if torch.cuda.is_available() else "cpu"
     batch_size = 64
     image_size = 32
-    channels = 1
+    channels = 3
     timesteps = 200
     initial_lr = 1e-3
-    final_lr = 1e-4
+    final_lr = 1e-5
 
     # Data
     train_dataset, _ = get_cifar10(gray_scale=(channels==1))
@@ -37,7 +37,7 @@ if __name__ == "__main__":
         dim=image_size,
         init_dim=None,
         out_dim=None,
-        dim_mults=(1, 2, 4, 8),
+        dim_mults=(1, 2, 4, 8, 16),
         channels=channels,
         with_time_emb=True,
         resnet_block_groups=12,
@@ -54,12 +54,12 @@ if __name__ == "__main__":
     )
     optimizer = Adam(model.parameters(), lr=initial_lr)
 
-    run_name = "default-huber-gray"
+    run_name = "default-huber-l"
 
     trainer = Trainer(
         model=model,
         optimizers=optimizer,
-        max_duration="30ep",
+        max_duration="100ep",
 
         train_dataloader=train_loader,
         device=device,
@@ -88,12 +88,14 @@ if __name__ == "__main__":
                 buffer_size=1,
                 capture_stderr=False,
                 capture_stdout=False,
-                log_level=LogLevel.BATCH,
-                log_interval=100,
-                flush_interval=200
+                log_level=LogLevel.EPOCH,
+                log_interval=1,
+                flush_interval=2
             )
             # TensorboardLogger(log_dir="runs", flush_interval=1000)
-        ]
+        ],
+
+        autoresume=True
     )
 
     trainer.fit()

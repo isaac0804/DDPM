@@ -28,3 +28,4 @@ class SamplingCallback(Callback):
         else:
             os.makedirs(folder)
             animate.save(f"{folder}/sample-{state.timestamp.epoch}.gif")
+        plt.close(fig)
