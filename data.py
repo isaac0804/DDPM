@@ -34,6 +34,8 @@ if __name__ == "__main__":
         test_dataset, batch_size=4, shuffle=True, num_workers=2)
 
     train_loader = iter(train_loader)
-    images, _ = next(train_loader)
+    images, labels = next(train_loader)
     print(images.max(), images.min())
     print(images.shape)
+    print(labels[0])
+    print(labels.shape)

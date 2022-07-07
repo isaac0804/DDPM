@@ -5,9 +5,12 @@ from composer.core.callback import Callback
 from matplotlib import animation
 from matplotlib import pyplot as plt
 
-
 class SamplingCallback(Callback):
     def epoch_end(self, state, logger):
+
+        folder = f"runs/{state.run_name}/samples"
+        if not os.path.exists(folder):
+            os.makedirs(folder)
 
         fig = plt.figure()
         samples = state.model.sample()
@@ -23,9 +26,23 @@ class SamplingCallback(Callback):
         animate = animation.ArtistAnimation(
             fig, ims, interval=50, blit=True, repeat_delay=1000)
         folder = f"runs/{state.run_name}/samples"
-        if os.path.exists(folder):
-            animate.save(f"{folder}/sample-{state.timestamp.epoch}.gif")
-        else:
-            os.makedirs(folder)
-            animate.save(f"{folder}/sample-{state.timestamp.epoch}.gif")
+        animate.save(f"{folder}/sample-{state.timestamp.epoch}.gif")
         plt.close(fig)
+
+class ImplicitSamplingCallback(Callback):
+    def epoch_end(self, state, logger):
+
+        folder = f"runs/{state.run_name}/samples"
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+
+        gens = state.model.sample(num_samples=4).cpu().numpy()
+        gens = np.clip(gens / 2 + 0.5, 0, 1)
+        for i, gen in enumerate(gens, 0):
+            fig = plt.figure()
+            ims = []
+            for im in gen:
+                ims.append([plt.imshow(im, cmap="gray", animated=True)])
+            animate = animation.ArtistAnimation(fig, ims, interval=100, blit=True, repeat_delay=1000)
+            animate.save(f"{folder}/sample-{state.timestamp.epoch}-{i}.gif")
+            plt.close(fig)

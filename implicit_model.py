@@ -5,29 +5,38 @@ import torch.optim as optim
 import torch.autograd as autograd
 from torch.utils.tensorboard import SummaryWriter
 
+from composer import Trainer
+from composer import ComposerModel
+from composer.callbacks import LRMonitor
+from composer.loggers import FileLogger, LogLevel, WandBLogger
+from composer.optim.scheduler import CosineAnnealingWithWarmupScheduler
+
 from tqdm import tqdm
+from matplotlib import animation
+from matplotlib import pyplot as plt
 
 from data import get_cifar10
+from callbacks import ImplicitSamplingCallback
 
 # Implicit Layer Implementation
 
 class ResnetImplicitLayer(nn.Module):
-    def __init__(self, channels, inner_channels, kernel_size=3, num_groups=8):
+    def __init__(self, latent_dim, inner_dim, kernel_size=3, num_groups=8):
         super().__init__()
-        self.channels = channels
-        self.inner_channels = inner_channels
+        self.latent_dim = latent_dim
+        self.inner_channels = inner_dim
 
-        self.conv1 = nn.Conv2d(channels, inner_channels, kernel_size, padding=kernel_size//2, groups=num_groups, bias=False)
-        self.conv2 = nn.Conv2d(inner_channels, channels, kernel_size, padding=kernel_size//2, groups=num_groups, bias=False)
-        self.norm1 = nn.GroupNorm(num_groups, inner_channels)
-        self.norm2 = nn.GroupNorm(num_groups, channels)
-        self.norm3 = nn.GroupNorm(num_groups, channels)
+        self.conv1 = nn.Conv2d(latent_dim, inner_dim, kernel_size, padding=kernel_size//2, groups=num_groups, bias=False)
+        self.conv2 = nn.Conv2d(inner_dim, latent_dim, kernel_size, padding=kernel_size//2, groups=num_groups, bias=False)
+        self.norm1 = nn.GroupNorm(num_groups, inner_dim)
+        self.norm2 = nn.GroupNorm(num_groups, latent_dim)
+        self.norm3 = nn.GroupNorm(num_groups, latent_dim)
 
     def forward(self, z, x):
         y = self.norm1(F.relu(self.conv1(z)))
         return self.norm3(F.relu(z + self.norm2(self.conv2(y) + x)))
 
-def anderson(f, x0, m=5, lam=1e-4, max_iter=50, tol=1e-2, beta=1.0):
+def anderson(f, x0, m=5, lam=1e-4, max_iter=50, tol=1e-2, beta=1.0, sampling=False):
     """ Anderson acceleration for fixed point iteration. """
     bsz, d, H, W = x0.shape
     X = torch.zeros(bsz, m, d*H*W, dtype=x0.dtype, device=x0.device)
@@ -41,6 +50,8 @@ def anderson(f, x0, m=5, lam=1e-4, max_iter=50, tol=1e-2, beta=1.0):
     y[:,0] = 1
     
     res = []
+    if sampling:
+        images = []
     for k in range(2, max_iter):
         n = min(k, m)
         G = F[:,:n]-X[:,:n]
@@ -50,9 +61,13 @@ def anderson(f, x0, m=5, lam=1e-4, max_iter=50, tol=1e-2, beta=1.0):
         X[:,k%m] = beta * (alpha[:,None] @ F[:,:n])[:,0] + (1-beta)*(alpha[:,None] @ X[:,:n])[:,0]
         F[:,k%m] = f(X[:,k%m].view_as(x0)).view(bsz, -1)
         res.append((F[:,k%m] - X[:,k%m]).norm().item()/(1e-5 + F[:,k%m].norm().item()))
+
+        if sampling:
+            images.append(X[:,k%m].view_as(x0))
+
         if (res[-1] < tol):
             break
-    return X[:,k%m].view_as(x0), res
+    return (X[:,k%m].view_as(x0), res) if not sampling else (X[:,k%m].view_as(x0), images)
 
 class DEQFixedPoint(nn.Module):
     def __init__(self, f, solver, **kwargs):
@@ -61,9 +76,16 @@ class DEQFixedPoint(nn.Module):
         self.solver = solver
         self.kwargs = kwargs
 
-    def forward(self, x):
+    def forward(self, x, sampling=False):
         with torch.no_grad():
-            z, self.foward_res = self.solver(lambda z: self.f(z, x), torch.zeros_like(x), **self.kwargs)
+            z = self.solver(lambda z: self.f(z, x), torch.zeros_like(x), sampling=sampling, **self.kwargs)
+            if not sampling:
+                z, self.foward_res = z
+            else:
+                z, images = z
+                z = self.f(z, x)
+                images.append(z)
+                return images
         z = self.f(z, x)
 
         z0 = z.clone().detach().requires_grad_()
@@ -75,16 +97,16 @@ class DEQFixedPoint(nn.Module):
         return z
 
 class ResnetImplicitModel(nn.Module):
-    def __init__(self, channels, inner_channels):
+    def __init__(self, channels, latent_dim, inner_dim, num_groups=8):
         super().__init__()
-        self.conv1 = nn.Conv2d(channels, inner_channels, kernel_size=1, bias=False)
-        self.norm1 = nn.BatchNorm2d(inner_channels)
+        self.conv1 = nn.Conv2d(channels, latent_dim, kernel_size=1, bias=False)
+        self.norm1 = nn.BatchNorm2d(latent_dim)
 
-        f = ResnetImplicitLayer(inner_channels, 64, kernel_size=3, num_groups=8)
+        f = ResnetImplicitLayer(latent_dim, inner_dim, kernel_size=3, num_groups=num_groups)
         self.deq = DEQFixedPoint(f, anderson, max_iter=50, tol=1e-2)
 
-        self.norm2 = nn.BatchNorm2d(inner_channels)
-        self.conv2 = nn.Conv2d(inner_channels, channels, kernel_size=1, bias=False)
+        self.norm2 = nn.BatchNorm2d(latent_dim)
+        self.conv2 = nn.Conv2d(latent_dim, channels, kernel_size=1, bias=False)
     
     def forward(self, x):
         x = self.norm1(self.conv1(x)).contiguous()
@@ -92,16 +114,13 @@ class ResnetImplicitModel(nn.Module):
         x = self.conv2(x)
         return x
 
-"""
-class DDPM_Implicit(ComposerModel):
-    def __init__(self, model, batch_size, image_size, channels, timesteps, loss_type="huber", betas_type="linear"):
+class DDIM(ComposerModel):
+    def __init__(self, model, batch_size, image_size, channels, loss_type="huber"):
         super().__init__()
         self.model = model
-        self.noise = None
         self.batch_size = batch_size
         self.image_size = image_size
         self.channels = channels
-        self.timesteps = timesteps
         self.device = torch.device(
             'cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -114,105 +133,90 @@ class DDPM_Implicit(ComposerModel):
         else:
             raise NotImplementedError()
 
-    def forward(self, x):
+    def forward(self, batch):
+        images, _ = batch # Excluding labels
+        noise = torch.randn_like(images)
+        return self.model(noise)
 
-        x, _ = x  # Excluding labels
-
-        # time = torch.randint(
-        #     0, self.timesteps, (self.batch_size,), device=self.device).long()
-        # self.noise = torch.randn_like(x)
-        # x = q_sample(x, t=time, betas=self.betas, noise=self.noise)
-        noise = torch.randn_like(x)
-
-        return self.model(noise, x)
-
-    def loss(self, predicted_noise, batch):
-        loss = self.criterion(predicted_noise, self.noise)
+    def loss(self, generated_images, batch):
+        target, _ = batch
+        loss = self.criterion(generated_images, target)
         return loss
 
     @torch.no_grad()
-    def sample(self, show_progress=False):
-        image = torch.randn(self.batch_size, self.channels,
+    def sample(self, num_samples=4):
+        noise = torch.randn(num_samples, self.channels,
                             self.image_size, self.image_size, device=self.device)
-        images = []
-
-        if not show_progress:
-            iterator = reversed(range(0, self.timesteps))
-        else:
-            iterator = tqdm(reversed(range(0, self.timesteps)),
-                            desc='sampling loop time step', total=self.timesteps)
-
-        for i in iterator:
-            # p sample
-            t = torch.full((self.batch_size,), i,
-                           dtype=torch.long, device=self.device)
-            betas = self.betas
-            alphas = get_alphas(self.betas)
-            betas_t = extract(betas, t, image.shape)
-            sqrt_one_minus_alphas_cumprod_t = extract(
-                get_sqrt_one_minus_alphas_cumprod(alphas), t, image.shape
-            )
-            sqrt_recip_alphas_t = extract(
-                get_sqrt_recip_alphas(alphas), t, image.shape)
-
-            # Equation 11 in the paper
-            # Use our model (noise predictor) to predict the mean
-            model_mean = sqrt_recip_alphas_t * (
-                image - betas_t *
-                self.model(image, t) / sqrt_one_minus_alphas_cumprod_t
-            )
-
-            if i == 0:
-                image = model_mean
-            else:
-                posterior_variance_t = extract(
-                    get_posterior_variance(alphas, betas), t, image.shape)
-                noise = torch.randn_like(image)
-                # Algorithm 2 line 4:
-                image = model_mean + torch.sqrt(posterior_variance_t) * noise
-            images.append(image.cpu().numpy())
-
-        return images
-"""
+        noise = self.model.norm1(self.model.conv1(noise)).contiguous()
+        noise = self.model.deq(noise, sampling=True)
+        noise = torch.cat(noise, dim=0)
+        noise = self.model.conv2(self.model.norm2(noise))
+        # convert to [num_samples, batch_size, image_size, image_size, channels]
+        noise = noise.view(-1, num_samples, self.channels, self.image_size, self.image_size).permute(1, 0, 3, 4, 2) 
+        print(noise.shape)
+        return noise
 
 if __name__ == "__main__":
 
-    epochs = 30
     batch_size = 64
+    image_size = 32
     channels = 1
-    inner_channels = 16
+    latent_dim = 16
+    inner_dim = 64
+    num_groups = 8
+    initial_lr = 1e-3
+    final_lr = 1e-5
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     train_dataset, _ = get_cifar10(gray_scale=(channels==1))
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size, shuffle=True, num_workers=2, drop_last=True)
     
-    model = ResnetImplicitModel(channels=channels, inner_channels=inner_channels).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    model = ResnetImplicitModel(channels=channels, latent_dim=latent_dim, inner_dim=inner_dim, num_groups=num_groups).to(device)
+    model = DDIM(model, batch_size, image_size, channels, loss_type="huber")
+    optimizer = optim.Adam(model.parameters(), lr=initial_lr)
+    run_name = "ddim-gray"
 
-    print("# Parameters: ", sum(p.numel() for p in model.parameters()))
+    trainer = Trainer(
+        model=model,
+        optimizers=optimizer,
+        max_duration="100ep",
 
-    writer = SummaryWriter(log_dir="./runs/cifar10_resnet_implicit")
+        train_dataloader=train_loader,
+        device="gpu" if torch.cuda.is_available() else "cpu",
 
-    for epoch in range(epochs):
-        total_loss = 0.
-        for i, (images, _) in tqdm(enumerate(train_loader, 0), total=len(train_loader), ncols=100, desc="Training Progress"):
-            images = images.to(device)
-            noise = torch.randn_like(images, device=device)
+        run_name=run_name,
+        save_folder=f"runs/{run_name}/checkpoints",
+        save_interval="5ep",
 
-            gen = model(noise)
-            loss = F.huber_loss(gen, images)
-            
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-        
-            it = len(train_loader) * epoch + i
-            writer.add_scalar("Loss", loss.item(), it)
-            total_loss += loss.item()
-            
-        print(f"Epoch   : {epoch+1}")
-        print(f"Loss    : {total_loss/len(train_loader):4.9f}")
+        # Scheduler
+        schedulers=[
+            CosineAnnealingWithWarmupScheduler(
+                t_warmup="5ep", alpha_f=final_lr)
+        ],
 
-        if (epoch + 1) % 50 == 0:
-            torch.save(model.state_dict(), f"checkpoints/model_epoch-{epoch+1}.pt")
+        # Callbacks
+        callbacks=[
+            ImplicitSamplingCallback(),
+            LRMonitor()
+        ],
+
+        # Loggers
+        loggers=[
+            WandBLogger(),
+            FileLogger(
+                filename="runs/{run_name}/logs-rank{rank}.txt",
+                buffer_size=1,
+                capture_stderr=False,
+                capture_stdout=False,
+                log_level=LogLevel.EPOCH,
+                log_interval=1,
+                flush_interval=2
+            )
+            # TensorboardLogger(log_dir="runs", flush_interval=1000)
+        ],
+
+        # autoresume=True
+    )
+
+    trainer.fit()

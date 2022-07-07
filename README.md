@@ -4,6 +4,10 @@ Implementation of DDPM in pytorch referencing [The Annotated Diffusion Model](ht
 
 The backbone will be ConvNeXT for now, but it can be changed to any other architecture.
 
+## Roadmap
+
+Currently working on deep implicit model that can reduce the number of parameters as well as the memory usage.
+
 ## Results
 
 ![Gray sample after 30 epochs](./assets/sample-30ep.gif)
