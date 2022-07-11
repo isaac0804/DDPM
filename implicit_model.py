@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.autograd as autograd
-from torch.utils.tensorboard import SummaryWriter
 
 from composer import Trainer
 from composer import ComposerModel
@@ -11,14 +10,10 @@ from composer.callbacks import LRMonitor
 from composer.loggers import FileLogger, LogLevel, WandBLogger
 from composer.optim.scheduler import CosineAnnealingWithWarmupScheduler
 
-from tqdm import tqdm
-from matplotlib import animation
-from matplotlib import pyplot as plt
 import math
 
 from data import get_cifar10
 from callbacks import ImplicitSamplingCallback
-from model import LinearAttention, PreNorm, SinusoidalPositionEmbeddings
 
 # Implicit Layer Implementation
 
@@ -39,7 +34,7 @@ class ResnetImplicitLayer(nn.Module):
         return self.norm3(F.relu(z + self.norm2(self.conv2(y) + x)))
 
 class TransformerLayer(nn.Module):
-    def __init__(self, dim, num_heads, expanding_ratio=4):
+    def __init__(self, dim, num_heads, patch_size, expanding_ratio=4):
         super().__init__()
         self.cross_mha = nn.MultiheadAttention(dim, num_heads, batch_first=True)
         self.mha = nn.MultiheadAttention(dim, num_heads, batch_first=True)
@@ -57,6 +52,7 @@ class TransformerLayer(nn.Module):
         attn, attn_weight = self.mha(z, z, z)
         z = self.norm1(attn + z)
         z = self.norm2(self.mlp(z) + z)
+
         return z
 
 def anderson(f, x0, m=5, lam=1e-4, max_iter=50, tol=1e-2, beta=1.0, sampling=False):
@@ -104,7 +100,7 @@ class DEQFixedPoint(nn.Module):
 
     def forward(self, x, sampling=False):
         with torch.no_grad():
-            z = self.solver(lambda z: self.f(z, x), torch.zeros_like(x), sampling=sampling, **self.kwargs)
+            z = self.solver(lambda z: self.f(z, x), torch.randn_like(x), sampling=sampling, **self.kwargs)
             if not sampling:
                 z, self.foward_res = z
             else:
@@ -141,8 +137,7 @@ class ResnetImplicitModel(nn.Module):
         return x
 
 class PositionalEncoding(nn.Module):
-
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+    def __init__(self, d_model, dropout = 0.1, max_len = 5000):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
@@ -174,12 +169,20 @@ class TransformerImplicitModel(nn.Module):
 
         self.class_embedding = nn.Embedding(10, latent_dim, device=self.device)
 
-        f = TransformerLayer(latent_dim, num_heads)
+        f = TransformerLayer(latent_dim, num_heads, patch_size)
         self.deq = DEQFixedPoint(f, anderson, max_iter=50, tol=1e-2)
 
-        self.conv = nn.Conv2d(latent_dim//patch_size**2, channels, kernel_size=1)
-        self.classify = nn.Linear(latent_dim, 10)
         self.fold = nn.Fold((32, 32), (2, 2), stride=(2, 2))
+        self.conv = nn.Sequential(
+            nn.Conv2d(latent_dim//patch_size**2, channels*4, kernel_size=3, padding="same", padding_mode="replicate"),
+            nn.BatchNorm2d(channels*4),
+            nn.GELU(),
+            nn.Conv2d(channels*4, channels*2, kernel_size=3, padding="same", padding_mode="replicate"),
+            nn.BatchNorm2d(channels*2),
+            nn.GELU(),
+            nn.Conv2d(channels*2, channels, kernel_size=1)
+        )
+        self.classify = nn.Linear(latent_dim, 10)
 
     def forward(self, inputs, labels):
 
@@ -291,7 +294,9 @@ if __name__ == "__main__":
     model = TransformerImplicitModel(channels, latent_dim, num_heads, patch_size)
     model = DDIM(model, batch_size, image_size, channels, loss_type="huber")
     optimizer = optim.Adam(model.parameters(), lr=initial_lr)
-    run_name = "ddim-transformer-gray"
+    run_name = "ddim-transformer-gray-l"
+
+    print("# Parameters:", sum(p.numel() for p in model.parameters()))
 
     trainer = Trainer(
         model=model,
